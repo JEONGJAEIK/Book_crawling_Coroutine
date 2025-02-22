@@ -2,6 +2,7 @@ package com.example.demo.controller
 
 import com.example.demo.dto.BookDTO
 import com.example.demo.service.BookService
+import com.example.demo.service.CrawlingService
 import org.springframework.data.domain.Page
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
@@ -14,7 +15,7 @@ import org.springframework.web.bind.annotation.*
  */
 @RestController
 @RequestMapping("/book")
-class BookController(private val bookService: BookService) {
+class BookController(private val bookService: BookService, private val crawlingService: CrawlingService) {
 
     @GetMapping
     fun mainPage() : ResponseEntity<List<BookDTO>> {
@@ -58,6 +59,11 @@ class BookController(private val bookService: BookService) {
             ResponseEntity<BookDTO> {
         val detailBook = bookService.searchDetailBooks(id)
         return ResponseEntity.ok(detailBook)
+    }
+
+    @GetMapping("/test")
+    fun test() {
+        crawlingService.crawling()
     }
 
 //    /**
