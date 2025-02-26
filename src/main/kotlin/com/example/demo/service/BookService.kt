@@ -225,7 +225,7 @@ class BookService(
                     image = dto.image ?: "이미지 파일이 없습니다",
                     isbn = dto.isbn ?: "ISBN 정보가 없습니다",
                     ranking = dto.ranking,
-                    favoriteCount = dto.favoriteCount
+                    favoriteCount = 0
                 )
                 entityManager.persist(book)
             }
