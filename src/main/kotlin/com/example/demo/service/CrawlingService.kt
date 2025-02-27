@@ -25,7 +25,7 @@ class CrawlingService(private val bookService: BookService) {
     private val latch = CountDownLatch(2)
     private val completionLatch = CountDownLatch(4)
     private var bookLinks: MutableList<String> = mutableListOf()
-    private var bestSellers: MutableList<BookDTO> = mutableListOf()
+    private var bestSellers: MutableList<BookDTO> = Collections.synchronizedList(mutableListOf())
 
     @Transactional
     fun main() {
@@ -63,9 +63,8 @@ class CrawlingService(private val bookService: BookService) {
         val page = browser.newPage()
 
         if (threadIndex == 1 || threadIndex == 2) {
-            val bestSellerPage = threadIndex
 
-            page.navigate("https://store.kyobobook.co.kr/bestseller/realtime?page=$bestSellerPage&per=50")
+            page.navigate("https://store.kyobobook.co.kr/bestseller/realtime?page=$threadIndex&per=50")
             page.waitForLoadState(LoadState.NETWORKIDLE)
             page.waitForSelector("div.ml-4 > .prod_link")
 
@@ -75,55 +74,51 @@ class CrawlingService(private val bookService: BookService) {
 
             latch.countDown()
         }
-
         page.close()
         latch.await()
     }
 
-
     private suspend fun scrapeBookData(browser: Browser, bookLinks: List<String>, threadIndex: Int) {
-            bookLinks.forEachIndexed { ranking, bookLink ->
-                if (ranking % 4 == threadIndex) {
-                        val page = browser.newPage()
-                        printWithThread("${ranking}, ${bookLink} 접근 시작", threadIndex)
-                        page.navigate(bookLink, Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT))
-                        printWithThread("${ranking}, ${bookLink} 접근 완료", threadIndex)
+        bookLinks.forEachIndexed { ranking, bookLink ->
+            if (ranking % 4 == threadIndex) {
+                val page = browser.newPage()
+                printWithThread("${ranking}, ${bookLink} 접근 시작", threadIndex)
+                page.navigate(bookLink, Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT))
+                printWithThread("${ranking}, ${bookLink} 접근 완료", threadIndex)
 
-                        val data = page.evaluate(
-                            """ () => JSON.stringify({
+                val data = page.evaluate(
+                    """ () => JSON.stringify({
                             title: document.querySelector('.prod_title')?.innerText?.trim() || '',
                             author: document.querySelector('.author')?.innerText?.trim() || '',
                             isbn: document.querySelector('#scrollSpyProdInfo .product_detail_area.basic_info table tbody tr:nth-child(1) td')?.innerText?.trim() || '',
                             description: document.querySelector('.intro_bottom')?.innerText?.trim() || '',
                             image: document.querySelector('.portrait_img_box img')?.getAttribute('src') || ''
                         }) """
-                        ).toString()
+                ).toString()
 
-                        val type = object : TypeToken<Map<String, String>>() {}.type
-                        val json: Map<String, String> = Gson().fromJson(data, type)
+                val type = object : TypeToken<Map<String, String>>() {}.type
+                val json: Map<String, String> = Gson().fromJson(data, type)
 
-                        page.close()
-                        printWithThread("${ranking} 데이터 파싱 완료", threadIndex)
+                printWithThread("${ranking} 데이터 파싱 완료", threadIndex)
 
-                        if (json.values.any { it.isNotBlank() }) {
-                            bestSellers.add(
-                                BookDTO(
-                                    id = 0L,
-                                    title = json["title"] ?: "",
-                                    author = json["author"] ?: "",
-                                    description = json["description"] ?: "",
-                                    image = json["image"] ?: "",
-                                    isbn = json["isbn"] ?: "",
-                                    ranking = ranking + 1,
-                                    favoriteCount = 0
-                                )
-                            )
-                    }
+                if (json.values.any { it.isNotBlank() }) {
+                    bestSellers.add(
+                        BookDTO(
+                            id = 0L,
+                            title = json["title"] ?: "",
+                            author = json["author"] ?: "",
+                            description = json["description"] ?: "",
+                            image = json["image"] ?: "",
+                            isbn = json["isbn"] ?: "",
+                            ranking = ranking + 1,
+                            favoriteCount = 0
+                        )
+                    )
                 }
+                page.close()
             }
         }
-
-
+    }
 
     private fun printWithThread(str: Any, threadIndex: Int) {
         val time = System.currentTimeMillis()
