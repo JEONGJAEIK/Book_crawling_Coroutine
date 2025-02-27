@@ -3,19 +3,17 @@ package com.example.demo.service
 import com.example.demo.dto.BookDTO
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import com.microsoft.playwright.Browser
-import com.microsoft.playwright.BrowserType
-import com.microsoft.playwright.Page
-import com.microsoft.playwright.Playwright
+import com.microsoft.playwright.*
 import com.microsoft.playwright.options.WaitUntilState
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.min
 
 @Service
-class CrawlingService(private val bookService: BookService) {
-
+class CrawlingService2(private val bookService: BookService) {
+    // browserContext 활용한 버전
     @Transactional
     fun crawling() {
         printWithThread("크롤링 시작")
@@ -23,8 +21,8 @@ class CrawlingService(private val bookService: BookService) {
         val browser = playwright.chromium().launch(BrowserType.LaunchOptions().setHeadless(true))
 
         val bookLinks = getBookLinks(browser)
-        val rankingPageMap = accessPage(browser, bookLinks)
-        val bestSellers = rankingPageMap.mapNotNull { scrapeBookData(it) }
+        val rankingPages = accessPage(browser, bookLinks)
+        val bestSellers = rankingPages.mapNotNull { scrapeBookData(it) }
 
         bookService.saveBestsellers(bestSellers)
         printWithThread("데이터 저장 완료")
@@ -51,23 +49,43 @@ class CrawlingService(private val bookService: BookService) {
         return bookLinks
     }
 
-    private fun accessPage(browser: Browser, bookLinks: List<String>): Map<Int, Page> {
-        val rankingPageMap = mutableMapOf<Int, Page>()
+    private fun accessPage(browser: Browser, bookLinks: List<String>): Map<Int, Pair<BrowserContext, Page>> {
+        val rankingPageMap = mutableMapOf<Int, Pair<BrowserContext, Page>>()
+        val bookLinkMap = bookLinks.mapIndexed { ranking, link -> ranking to link }.toMap()
+        val chunkSize = 10
 
-        bookLinks.forEachIndexed { ranking, bookLink ->
-            val page = browser.newPage()
-            printWithThread("${ranking}, ${bookLink}에 접근 시작")
-            page.navigate(bookLink, Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT))
-            printWithThread("${ranking}, ${bookLink}에 접근 완료")
-            rankingPageMap[ranking] = page
+        val bookLinkChunks = (0 until bookLinkMap.size step chunkSize).map { startIndex ->
+            bookLinkMap.entries.toList().subList(startIndex, min(startIndex + chunkSize, bookLinkMap.size))
         }
 
+        bookLinkChunks.forEachIndexed { _, chunk ->
+            val context = browser.newContext()
+
+            chunk.forEach { (ranking, bookLink) ->
+                val page = context.newPage()
+                printWithThread("${context}, ${page}, ${bookLink}에 접근 시작")
+                page.navigate(bookLink, Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT))
+                printWithThread("${context}, ${page}, ${bookLink}에 접근 완료")
+                rankingPageMap[ranking] = context to page
+            }
+        }
         return rankingPageMap
     }
 
-    private fun scrapeBookData(rankingPage: Map.Entry<Int, Page>): BookDTO? {
+//        bookLinks.forEachIndexed { ranking, bookLink ->
+//            val page = browser.newPage()
+//            printWithThread("${ranking}, ${bookLink}에 접근 시작")
+//            page.navigate(bookLink, Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT))
+//            printWithThread("${ranking}, ${bookLink}에 접근 완료")
+//            rankingPageMap[ranking] = page
+//        }
+//
+//        return rankingPageMap
+
+
+    private fun scrapeBookData(rankingPage: Map.Entry<Int, Pair<BrowserContext, Page>>): BookDTO? {
         val ranking = rankingPage.key
-        val page = rankingPage.value
+        val (context, page) = rankingPage.value
 
         val data = page.evaluate(
             """ () => JSON.stringify({
@@ -82,7 +100,7 @@ class CrawlingService(private val bookService: BookService) {
         val json: Map<String, String> = Gson().fromJson(data, type)
 
         page.close()
-        printWithThread("${ranking}, ${page}의 데이터 파싱 완료")
+        printWithThread("${ranking}, ${context}, ${page}의 데이터 파싱 완료")
         if (json.values.all { it.isBlank() }) {
             return null
         }
