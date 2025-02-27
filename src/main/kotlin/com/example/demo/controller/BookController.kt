@@ -63,6 +63,6 @@ class BookController(private val bookService: BookService, private val crawlingS
 
     @GetMapping("/test")
     fun test() {
-        crawlingService.crawling()
+        crawlingService.main()
     }
 }
