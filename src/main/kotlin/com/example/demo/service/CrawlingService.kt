@@ -41,7 +41,6 @@ class CrawlingService(private val bookService: BookService) {
             val bestSellers = scrapeBookData(browser, bookLinks, threadIndex)
             getBookLinks(browser, threadIndex)
 
-            printWithThread("📌 bestSellers 크기: ${bestSellers.size}", threadIndex)
             completionLatch.countDown()
 
             browser.close()
@@ -49,6 +48,7 @@ class CrawlingService(private val bookService: BookService) {
 
             if (threadIndex == 0) {
                 completionLatch.await()
+                printWithThread("📌 bestSellers 크기: ${bestSellers.size}", threadIndex)
                 printWithThread("데이터 저장 시작", threadIndex)
                 bookService.saveBestsellers(bestSellers)
                 printWithThread("데이터 저장 완료", threadIndex)
