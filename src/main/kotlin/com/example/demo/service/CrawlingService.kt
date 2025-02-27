@@ -25,36 +25,36 @@ class CrawlingService(private val bookService: BookService) {
     private val latch = CountDownLatch(2)
     private val completionLatch = CountDownLatch(4)
     private var bookLinks: MutableList<String> = mutableListOf()
-    private var bestSellers: MutableList<BookDTO> = Collections.synchronizedList(mutableListOf())
 
     @Transactional
     fun main() {
+        printWithThread("크롤링 시작", 0)
         repeat(4) { threadIndex ->
             thread { startCrawling(threadIndex) }
         }
     }
 
     fun startCrawling(threadIndex: Int) {
-        printWithThread("크롤링 시작", threadIndex)
         CoroutineScope(Dispatchers.IO).launch {
             val playwright = Playwright.create()
             val browser = playwright.chromium().launch(BrowserType.LaunchOptions().setHeadless(true))
+            val bestSellers = scrapeBookData(browser, bookLinks, threadIndex)
             getBookLinks(browser, threadIndex)
-            scrapeBookData(browser, bookLinks, threadIndex)
 
             printWithThread("📌 bestSellers 크기: ${bestSellers.size}", threadIndex)
             completionLatch.countDown()
 
             browser.close()
             playwright.close()
-            printWithThread("크롤링 완료", threadIndex)
-        }
 
-        if (threadIndex == 0) {
-            completionLatch.await()
-            printWithThread("데이터 저장 시작", threadIndex)
-            bookService.saveBestsellers(bestSellers)
-            printWithThread("데이터 저장 완료", threadIndex)
+            if (threadIndex == 0) {
+                completionLatch.await()
+                printWithThread("데이터 저장 시작", threadIndex)
+                bookService.saveBestsellers(bestSellers)
+                printWithThread("데이터 저장 완료", threadIndex)
+                printWithThread("크롤링 완료", threadIndex)
+
+            }
         }
     }
 
@@ -78,7 +78,10 @@ class CrawlingService(private val bookService: BookService) {
         latch.await()
     }
 
-    private suspend fun scrapeBookData(browser: Browser, bookLinks: List<String>, threadIndex: Int) {
+    private suspend fun scrapeBookData(browser: Browser, bookLinks: List<String>, threadIndex: Int): List<BookDTO> {
+
+        val bestSellers: MutableList<BookDTO> = Collections.synchronizedList(mutableListOf())
+
         bookLinks.forEachIndexed { ranking, bookLink ->
             if (ranking % 4 == threadIndex) {
                 val page = browser.newPage()
@@ -118,6 +121,7 @@ class CrawlingService(private val bookService: BookService) {
                 page.close()
             }
         }
+        return bestSellers
     }
 
     private fun printWithThread(str: Any, threadIndex: Int) {
