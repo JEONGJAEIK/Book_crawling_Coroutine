@@ -10,10 +10,9 @@ import com.microsoft.playwright.Playwright
 import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.WaitUntilState
 import jakarta.transaction.Transactional
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import org.springframework.stereotype.Service
 import java.text.SimpleDateFormat
 import java.util.*
@@ -37,21 +36,20 @@ class CrawlingService(private val bookService: BookService) {
 
     fun startCrawling(threadIndex: Int) {
         printWithThread("크롤링 시작", threadIndex)
-        runBlocking {
-            withContext(Dispatchers.IO) {
-                val playwright = Playwright.create()
-                val browser = playwright.chromium().launch(BrowserType.LaunchOptions().setHeadless(true))
-                getBookLinks(browser, threadIndex)
-                scrapeBookData(browser, bookLinks, threadIndex)
+        CoroutineScope(Dispatchers.IO).launch {
+            val playwright = Playwright.create()
+            val browser = playwright.chromium().launch(BrowserType.LaunchOptions().setHeadless(true))
+            getBookLinks(browser, threadIndex)
+            scrapeBookData(browser, bookLinks, threadIndex)
 
-                printWithThread("📌 bestSellers 크기: ${bestSellers.size}", threadIndex)
-                completionLatch.countDown()
+            printWithThread("📌 bestSellers 크기: ${bestSellers.size}", threadIndex)
+            completionLatch.countDown()
 
-                browser.close()
-                playwright.close()
-                printWithThread("크롤링 완료", threadIndex)
-            }
+            browser.close()
+            playwright.close()
+            printWithThread("크롤링 완료", threadIndex)
         }
+
         if (threadIndex == 0) {
             completionLatch.await()
             printWithThread("데이터 저장 시작", threadIndex)
@@ -59,8 +57,6 @@ class CrawlingService(private val bookService: BookService) {
             printWithThread("데이터 저장 완료", threadIndex)
         }
     }
-
-
 
 
     private fun getBookLinks(browser: Browser, threadIndex: Int) {
@@ -85,11 +81,9 @@ class CrawlingService(private val bookService: BookService) {
     }
 
 
-    private fun scrapeBookData(browser: Browser, bookLinks: List<String>, threadIndex: Int) {
-        runBlocking {
-            bookLinks.mapIndexedNotNull { ranking, bookLink ->
+    private suspend fun scrapeBookData(browser: Browser, bookLinks: List<String>, threadIndex: Int) {
+            bookLinks.forEachIndexed { ranking, bookLink ->
                 if (ranking % 4 == threadIndex) {
-                    launch {
                         val page = browser.newPage()
                         printWithThread("${ranking}, ${bookLink} 접근 시작", threadIndex)
                         page.navigate(bookLink, Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT))
@@ -111,27 +105,24 @@ class CrawlingService(private val bookService: BookService) {
                         page.close()
                         printWithThread("${ranking} 데이터 파싱 완료", threadIndex)
 
-                        if (json.values.all { it.isBlank() }) {
-                            null
-                        } else {
-                            bestSellers.add(BookDTO(
-                                id = 0L,
-                                title = json["title"] ?: "",
-                                author = json["author"] ?: "",
-                                description = json["description"] ?: "",
-                                image = json["image"] ?: "",
-                                isbn = json["isbn"] ?: "",
-                                ranking = ranking + 1,
-                                favoriteCount = 0
-                            ))
-                        }
+                        if (json.values.any { it.isNotBlank() }) {
+                            bestSellers.add(
+                                BookDTO(
+                                    id = 0L,
+                                    title = json["title"] ?: "",
+                                    author = json["author"] ?: "",
+                                    description = json["description"] ?: "",
+                                    image = json["image"] ?: "",
+                                    isbn = json["isbn"] ?: "",
+                                    ranking = ranking + 1,
+                                    favoriteCount = 0
+                                )
+                            )
                     }
-                } else {
-                    null
                 }
             }
         }
-    }
+
 
 
     private fun printWithThread(str: Any, threadIndex: Int) {
