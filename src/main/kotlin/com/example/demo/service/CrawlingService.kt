@@ -24,6 +24,7 @@ class CrawlingService(private val bookService: BookService) {
 
     private val latch = CountDownLatch(2)
     private val completionLatch = CountDownLatch(4)
+    private var bestSellers: MutableList<BookDTO> = Collections.synchronizedList(mutableListOf())
     private var bookLinks: MutableList<String> = mutableListOf()
 
     @Transactional
@@ -38,13 +39,14 @@ class CrawlingService(private val bookService: BookService) {
         CoroutineScope(Dispatchers.IO).launch {
             val playwright = Playwright.create()
             val browser = playwright.chromium().launch(BrowserType.LaunchOptions().setHeadless(true))
-            val bestSellers = scrapeBookData(browser, bookLinks, threadIndex)
+            bestSellers = scrapeBookData(browser, bookLinks, threadIndex).toMutableList()
             getBookLinks(browser, threadIndex)
 
             completionLatch.countDown()
 
             browser.close()
             playwright.close()
+        }
 
             if (threadIndex == 0) {
                 completionLatch.await()
@@ -55,7 +57,7 @@ class CrawlingService(private val bookService: BookService) {
                 printWithThread("크롤링 완료", threadIndex)
 
             }
-        }
+
     }
 
 
@@ -79,8 +81,6 @@ class CrawlingService(private val bookService: BookService) {
     }
 
     private suspend fun scrapeBookData(browser: Browser, bookLinks: List<String>, threadIndex: Int): List<BookDTO> {
-
-        val bestSellers: MutableList<BookDTO> = Collections.synchronizedList(mutableListOf())
 
         bookLinks.forEachIndexed { ranking, bookLink ->
             if (ranking % 4 == threadIndex) {
