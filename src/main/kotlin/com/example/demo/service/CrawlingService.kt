@@ -1,133 +1,76 @@
 package com.example.demo.service
 
 import com.example.demo.dto.BookDTO
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
-import com.microsoft.playwright.Browser
-import com.microsoft.playwright.BrowserType
-import com.microsoft.playwright.Page
-import com.microsoft.playwright.Playwright
-import com.microsoft.playwright.options.LoadState
-import com.microsoft.playwright.options.WaitUntilState
-import jakarta.transaction.Transactional
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.safety.Safelist
 import org.springframework.stereotype.Service
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.CountDownLatch
-import kotlin.concurrent.thread
 
 @Service
 class CrawlingService(private val bookService: BookService) {
 
-    private val latch = CountDownLatch(2)
-    private val completionLatch = CountDownLatch(4)
-    private var bestSellers: MutableList<BookDTO> = Collections.synchronizedList(mutableListOf())
-    private var bookLinks: MutableList<String> = mutableListOf()
+    fun main() = runBlocking {
+        printWithThread("크롤링 시작")
+        val bestSellerMaps = getBestSellerMaps()
+        val bestSellerBookDTOs = getBestSellerBookDTOs(bestSellerMaps)
+        bookService.saveBestsellers(bestSellerBookDTOs)
+        printWithThread("크롤링 완료")
+    }
 
-    @Transactional
-    fun main() {
-        printWithThread("크롤링 시작", 0)
-        repeat(4) { threadIndex ->
-            thread { startCrawling(threadIndex) }
+    private fun getBestSellerMaps(): Map<Int, String> {
+        val targetUrl = "https://www.yes24.com/Product/Category/RealTimeBestSeller?categoryNumber=001"
+        val baseUrl = "https://www.yes24.com"
+
+        val doc: Document = Jsoup.connect(targetUrl).get()
+        val bestSellerLinks =
+            doc.select("#yesBestList > li > div > div.item_info > div.info_row.info_name > a.gd_name").eachAttr("href")
+
+        return bestSellerLinks.mapIndexed { index, href ->
+            (index + 1) to "$baseUrl$href"
+        }.toMap().also {
+            printWithThread("${bestSellerLinks.size}개 링크 크롤링 완료")
         }
     }
 
-    fun startCrawling(threadIndex: Int) {
-        CoroutineScope(Dispatchers.IO).launch {
-            val playwright = Playwright.create()
-            val browser = playwright.chromium().launch(BrowserType.LaunchOptions().setHeadless(true))
-            bestSellers = scrapeBookData(browser, bookLinks, threadIndex).toMutableList()
-            getBookLinks(browser, threadIndex)
-
-            completionLatch.countDown()
-
-            browser.close()
-            playwright.close()
-        }
-
-            if (threadIndex == 0) {
-                completionLatch.await()
-                printWithThread("📌 bestSellers 크기: ${bestSellers.size}", threadIndex)
-                printWithThread("데이터 저장 시작", threadIndex)
-                bookService.saveBestsellers(bestSellers)
-                printWithThread("데이터 저장 완료", threadIndex)
-                printWithThread("크롤링 완료", threadIndex)
-
-            }
-
-    }
-
-
-    private fun getBookLinks(browser: Browser, threadIndex: Int) {
-        val page = browser.newPage()
-
-        if (threadIndex == 1 || threadIndex == 2) {
-
-            page.navigate("https://store.kyobobook.co.kr/bestseller/realtime?page=$threadIndex&per=50")
-            page.waitForLoadState(LoadState.NETWORKIDLE)
-            page.waitForSelector("div.ml-4 > .prod_link")
-
-            val links = page.locator("div.ml-4 > .prod_link").all()
-            bookLinks.addAll(links.mapNotNull { it.getAttribute("href") })
-            printWithThread("${threadIndex}페이지 ${bookLinks.size}개의 도서 링크 수집 완료", threadIndex)
-
-            latch.countDown()
-        }
-        page.close()
-        latch.await()
-    }
-
-    private suspend fun scrapeBookData(browser: Browser, bookLinks: List<String>, threadIndex: Int): List<BookDTO> {
-
-        bookLinks.forEachIndexed { ranking, bookLink ->
-            if (ranking % 4 == threadIndex) {
-                val page = browser.newPage()
-                printWithThread("${ranking}, ${bookLink} 접근 시작", threadIndex)
-                page.navigate(bookLink, Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT))
-                printWithThread("${ranking}, ${bookLink} 접근 완료", threadIndex)
-
-                val data = page.evaluate(
-                    """ () => JSON.stringify({
-                            title: document.querySelector('.prod_title')?.innerText?.trim() || '',
-                            author: document.querySelector('.author')?.innerText?.trim() || '',
-                            isbn: document.querySelector('#scrollSpyProdInfo .product_detail_area.basic_info table tbody tr:nth-child(1) td')?.innerText?.trim() || '',
-                            description: document.querySelector('.intro_bottom')?.innerText?.trim() || '',
-                            image: document.querySelector('.portrait_img_box img')?.getAttribute('src') || ''
-                        }) """
-                ).toString()
-
-                val type = object : TypeToken<Map<String, String>>() {}.type
-                val json: Map<String, String> = Gson().fromJson(data, type)
-
-                printWithThread("${ranking} 데이터 파싱 완료", threadIndex)
-
-                if (json.values.any { it.isNotBlank() }) {
-                    bestSellers.add(
-                        BookDTO(
-                            id = 0L,
-                            title = json["title"] ?: "",
-                            author = json["author"] ?: "",
-                            description = json["description"] ?: "",
-                            image = json["image"] ?: "",
-                            isbn = json["isbn"] ?: "",
-                            ranking = ranking + 1,
-                            favoriteCount = 0
-                        )
-                    )
+    private suspend fun getBestSellerBookDTOs(bestSellersMaps: Map<Int, String>): List<BookDTO> =
+        coroutineScope {
+            bestSellersMaps.map { (ranking, link) ->
+                async(Dispatchers.IO) {
+                    getBestSellerBookDTO(ranking, link)
                 }
-                page.close()
-            }
+            }.awaitAll()
         }
-        return bestSellers
+
+    private fun getBestSellerBookDTO(ranking: Int, link: String): BookDTO {
+        val doc: Document = Jsoup.connect(link).get()
+
+        val title = doc.selectFirst("#yDetailTopWrap > div.topColRgt > div.gd_infoTop > div > h2")?.text() ?: "제목 없음"
+        val author = doc.selectFirst("#yDetailTopWrap > div.topColRgt > div.gd_infoTop > span.gd_pubArea > span.gd_auth > a:nth-child(1)")?.text() ?: "저자 없음"
+        val image = doc.selectFirst("#yDetailTopWrap > div.topColLft > div > div.gd_3dGrp.gdImgLoadOn > div > span.gd_img > em > img")?.attr("src") ?: "이미지 없음"
+        val isbn = doc.selectFirst("#infoset_specific > div.infoSetCont_wrap > div > table > tbody > tr:nth-child(3) > td")?.text() ?: "ISBN 없음"
+        val rawDescription = doc.selectFirst("#infoset_introduce > div.infoSetCont_wrap > div.infoWrap_txt")?.text() ?: "설명 없음"
+        val description = Jsoup.clean(rawDescription, Safelist.none()).trim()
+
+        return BookDTO(
+            id = null,
+            title = title,
+            author = author,
+            description = description,
+            image = image,
+            isbn = isbn,
+            ranking = ranking,
+            favoriteCount = 0
+        ).also {
+            printWithThread("${ranking}위 책 크롤링 완료")
+        }
     }
 
-    private fun printWithThread(str: Any, threadIndex: Int) {
+    private fun printWithThread(str: Any) {
         val time = System.currentTimeMillis()
         val formattedTime = SimpleDateFormat("mm분 ss초 SSS", Locale.getDefault()).format(Date(time))
-
-        println("Thread[$threadIndex] $str $formattedTime")
+        println("$str $formattedTime")
     }
 }
