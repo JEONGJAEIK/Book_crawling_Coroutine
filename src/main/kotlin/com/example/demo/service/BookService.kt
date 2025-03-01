@@ -57,11 +57,7 @@ class BookService(
             throw BookException(BookErrorCode.QUERY_EMPTY)
         }
 
-        val starttime = System.currentTimeMillis()
-        var endtime = System.currentTimeMillis()
-        println(starttime)
         var bookList = searchBooksDB(query)
-        println(endtime)
 
         if (keywordRepository.existsByKeyword(query)) {
             return BookUtil.pagingBooks(page, size, bookList)
@@ -172,9 +168,10 @@ class BookService(
             .orElseThrow { BookException(BookErrorCode.BOOK_NOT_FOUND) }
     }
 
-    fun searchRankedBooks(): List<BookDTO> {
-        return bookRepository.findByRankingIsNotNullOrderByRankingAsc()
+    fun searchBestSellersDB(page: Int, size: Int): Page<BookDTO> {
+        val bestSellers = bookRepository.findByRankingIsNotNullOrderByRankingAsc()
             .map { BookUtil.entityToDTO(it) }
+        return BookUtil.pagingBooks(page, size, bestSellers)
     }
 
     /**

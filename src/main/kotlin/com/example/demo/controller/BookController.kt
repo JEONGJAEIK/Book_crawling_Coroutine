@@ -18,8 +18,10 @@ import org.springframework.web.bind.annotation.*
 class BookController(private val bookService: BookService, private val crawlingService: CrawlingService) {
 
     @GetMapping
-    fun mainPage(): ResponseEntity<List<BookDTO>> {
-        val bestSellers = bookService.searchRankedBooks()
+    fun mainPage(@RequestParam(name = "page") page: Int = 0,
+                 @RequestParam(name = "size") size: Int = 20
+    ): ResponseEntity<Page<BookDTO>> {
+        val bestSellers = bookService.searchBestSellersDB(page, size)
         return ResponseEntity.ok(bestSellers)
     }
 
