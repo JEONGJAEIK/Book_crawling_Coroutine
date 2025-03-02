@@ -32,6 +32,8 @@ dependencies {
     implementation("com.microsoft.playwright:playwright:1.42.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3") // 최신 버전 확인 필요
     implementation("org.jsoup:jsoup:1.18.3")
+    implementation("redis.clients:jedis:4.3.1")
+
 }
 
 kotlin {
