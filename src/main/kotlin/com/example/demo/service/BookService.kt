@@ -4,11 +4,10 @@ import com.example.demo.dto.BookDTO
 import com.example.demo.dto.KakaoDTO
 import com.example.demo.dto.NaverDTO
 import com.example.demo.entity.Book
-import com.example.demo.entity.Keyword
 import com.example.demo.exception.BookErrorCode
 import com.example.demo.exception.BookException
 import com.example.demo.repository.BookRepository
-import com.example.demo.repository.KeywordRepository
+import com.example.demo.repository.KeywordRedisRepository
 import com.example.demo.util.BookUtil
 import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.persistence.EntityManager
@@ -35,7 +34,7 @@ import org.springframework.web.client.RestTemplate
 class BookService(
     private val bookRepository: BookRepository,
     private val objectMapper: ObjectMapper,
-    private val keywordRepository: KeywordRepository,
+    private val keywordRedisRepository: KeywordRedisRepository,
     @Value("\${naver.client-id}") val clientId: String,
     @Value("\${naver.client-secret}") val clientSecret: String,
     @Value("\${naver.book-search-url}") val naverUrl: String,
@@ -48,8 +47,19 @@ class BookService(
 
     /**
      * -- 도서 검색 메소드 --
-     * 1. 카카오와 네이버 두 Api에 요청
-     * 2. Page<BookDto>로 변환하여 반환
+     * 1. 입력된 적이 있는 검색어 인지 Redis 이용 판단
+     * 2. 입력된 적이 있으면 DB 기반 통합 검색 시행
+     * 3. 입력된 적이 없을 경우 DB 기반 통합 검색 시행하고 데이터가 200건보다 적을경우만 API 요청
+     * 4. 처음엔 소량을 요청하고 그래도 200권이 안되면 수량을 늘려 요청
+     * 5. 3회까지 요청하고도 200권이 안되면 요청 종료
+     * 6. Page<BookDto>로 변환하여 반환
+     *
+     * @param -- query(검색어)
+     * @param -- page 페이지 --
+     * @param -- size 한 페이지에 보여주는 책 수량 --
+     * @return -- Page<BookDTO> --
+     * @author -- 정재익 --
+     * @since -- 3월 03일 --
      */
     @Transactional
     fun searchBooks(query: String?, page: Int, size: Int): Page<BookDTO> {
@@ -59,12 +69,11 @@ class BookService(
 
         var bookList = searchBooksDB(query)
 
-        if (keywordRepository.existsByKeyword(query)) {
+        if (keywordRedisRepository.existsByKeyword(query)) {
             return BookUtil.pagingBooks(page, size, bookList)
         }
 
-        keywordRepository.save(Keyword(query))
-
+        keywordRedisRepository.saveKeyword(query)
 
         var start = 0
         val end = 3
@@ -236,7 +245,7 @@ class BookService(
      * -- DB에서 관련 검색 데이터를 찾는 메소드 --
      */
     fun searchBooksDB(query: String): List<BookDTO> {
-        return bookRepository.findByTitleOrAuthor(query)
+        return bookRepository.searchFullText(query)
             .take(200)
             .map { BookUtil.entityToDTO(it) }
     }
