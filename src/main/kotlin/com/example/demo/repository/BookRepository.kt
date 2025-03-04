@@ -28,8 +28,12 @@ interface BookRepository : JpaRepository<Book, Long> {
      * @since -- 3월 03일 --
      */
     @Query(
-        value = "SELECT * FROM book " +
-                "WHERE MATCH(title, description) AGAINST(:keyword IN NATURAL LANGUAGE MODE)",
+        value = """
+        SELECT * FROM book 
+        WHERE MATCH(title, description) AGAINST(:keyword IN NATURAL LANGUAGE MODE)
+        ORDER BY MATCH(title, description) AGAINST(:keyword IN NATURAL LANGUAGE MODE) DESC
+        LIMIT 300
+    """,
         nativeQuery = true
     )
     fun searchFullText(@Param("keyword") keyword: String): List<Book>

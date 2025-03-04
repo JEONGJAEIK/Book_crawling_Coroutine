@@ -1,14 +1,14 @@
 package com.example.demo.service
 
 import com.example.demo.dto.BookDTO
+import com.example.demo.repository.RedisRepository
 import kotlinx.coroutines.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.safety.Safelist
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.security.MessageDigest
-import java.text.SimpleDateFormat
-import java.util.*
 
 /**
  * -- 크롤링 서비스 --
@@ -17,8 +17,8 @@ import java.util.*
  * @since -- 3월 01일 --
  */
 @Service
-class CrawlingService(private val bookService: BookService, private val redisHash: RedisHash) {
-
+class CrawlingService(private val bookService: BookService, private val redisRepository : RedisRepository) {
+    private val logger = LoggerFactory.getLogger(CrawlingService::class.java)
 
     /**
      * -- 크롤링 전체 통제 메서드 --
@@ -34,18 +34,14 @@ class CrawlingService(private val bookService: BookService, private val redisHas
         val doc = Jsoup.connect(targetUrl).get()
         val bestSellerMaps = getBestSellerMaps(doc)
         val currentHash = getMapHash(bestSellerMaps)
-        val previousHash = redisHash.loadPreviousHash()
-        println("Current hash: $currentHash")
-        println("Previous hash: $previousHash")
+        val previousHash = redisRepository.loadPreviousHash()
 
-        if (previousHash != currentHash) {
-            printWithThread("크롤링 시작")
+        if (currentHash != previousHash) {
             val bestSellerBookDTOs = getBestSellerBookDTOs(bestSellerMaps)
             bookService.saveBestsellers(bestSellerBookDTOs)
-            redisHash.saveHash(currentHash)
-            printWithThread("크롤링 완료")
+            redisRepository.saveHash(currentHash)
         } else {
-            printWithThread("베스트셀러 변경 없음, 크롤링 생략")
+            logger.info("베스트셀러 변경 없음. 크롤링 생략")
         }
     }
 
@@ -64,7 +60,6 @@ class CrawlingService(private val bookService: BookService, private val redisHas
             .joinToString("") { "%02x".format(it) }
     }
 
-
     /**
      * -- 베스트셀러 목록 순위와 링크를 가져오는 메소드 --
      *
@@ -81,9 +76,7 @@ class CrawlingService(private val bookService: BookService, private val redisHas
 
         return bestSellerLinks.mapIndexed { index, href ->
             (index + 1) to "$baseUrl$href"
-        }.toMap().also {
-            printWithThread("${bestSellerLinks.size}개 링크 크롤링 완료")
-        }
+        }.toMap()
     }
 
     /**
@@ -114,49 +107,35 @@ class CrawlingService(private val bookService: BookService, private val redisHas
      * @author -- 정재익 --
      * @since -- 3월 01일 --
      */
-    private fun getBestSellerBookDTO(ranking: Int, link: String): BookDTO {
+    private fun getBestSellerBookDTO(ranking: Int, link: String, maxRetries: Int = 3): BookDTO {
+        var retries = 0
         val doc: Document = Jsoup.connect(link).get()
 
-        val title = doc.selectFirst("#yDetailTopWrap > div.topColRgt > div.gd_infoTop > div > h2")?.text() ?: "제목 없음"
-        val author =
-            doc.selectFirst("#yDetailTopWrap > div.topColRgt > div.gd_infoTop > span.gd_pubArea > span.gd_auth > a:nth-child(1)")
-                ?.text() ?: "저자 없음"
-        val image =
-            doc.selectFirst("#yDetailTopWrap > div.topColLft > div > div.gd_3dGrp.gdImgLoadOn > div > span.gd_img > em > img")
-                ?.attr("src") ?: "이미지 없음"
-        val isbn =
-            doc.selectFirst("#infoset_specific > div.infoSetCont_wrap > div > table > tbody > tr:nth-child(3) > td")
-                ?.text() ?: "ISBN 없음"
-        val rawDescription =
-            doc.selectFirst("#infoset_introduce > div.infoSetCont_wrap > div.infoWrap_txt")?.text() ?: "설명 없음"
-        val description = Jsoup.clean(rawDescription, Safelist.none()).trim()
+        while (true) {
+            val title = doc.selectFirst("h2.gd_name")?.text()?.takeIf { it.isNotBlank() }  ?: "제목 정보 없음"
+            val author = doc.selectFirst("span.gd_auth")?.text()?.takeIf { it.isNotBlank() }  ?: "작가 정보 없음"
+            val description = Jsoup.clean(doc.selectFirst("div#infoset_introduce div.infoWrap_txtInner")?.text()?.takeIf { it.isNotBlank() }  ?: "설명 없음", Safelist.none()).trim()
+            val image = doc.selectFirst("img.gImg")?.attr("src")?.takeIf { it.isNotBlank() }  ?: "이미지 없음"
+            val isbn = extractIsbn(doc)
 
-        return BookDTO(
-            id = null,
-            title = title,
-            author = author,
-            description = description,
-            image = image,
-            isbn = isbn,
-            ranking = ranking,
-            favoriteCount = 0
-        ).also {
-            printWithThread("${ranking}위 책 크롤링 완료")
+            if (title == "제목 정보 없음" || author == "작가 정보 없음" || description == "설명 없음" ||
+                image == "이미지 없음" || isbn == ""
+            ) {
+                retries++
+                if (retries >= maxRetries) {
+                    return BookDTO(null, title, author, description, image, isbn, ranking, 0)
+                }
+                continue
+            }
+            return BookDTO(null, title, author, description, image, isbn, ranking, 0)
         }
     }
 
-    /**
-     * -- 크롤링 시간측정을 위한 메소드 --
-     *
-     * @param -- str 모든타입 설정 가능-
-     *
-     * @author -- 정재익 --
-     * @since -- 3월 01일 --
-     */
-    private fun printWithThread(str: Any) {
-        val time = System.currentTimeMillis()
-        val formattedTime = SimpleDateFormat("mm분 ss초 SSS", Locale.getDefault()).format(Date(time))
-        println("$str $formattedTime")
+
+    private fun extractIsbn(doc: Document, default: String = "ISBN 정보 없음"): String {
+        val tableScope = doc.selectFirst("div.infoSetCont_wrap .b_size")
+        val isbn = tableScope?.selectFirst("tr:has(th:contains(ISBN13)) td")?.text() ?: default
+        return isbn
     }
 }
 

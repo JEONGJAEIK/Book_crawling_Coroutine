@@ -39,7 +39,7 @@ class BookController(private val bookService: BookService, private val crawlingS
      */
     @GetMapping("/search")
     fun searchBooks(
-        @RequestParam(name = "query") query: String?,
+        @RequestParam(name = "query") query: String,
         @RequestParam(name = "page") page: Int = 0,
         @RequestParam(name = "size") size: Int = 10
     ): ResponseEntity<Page<BookDTO>> {
